@@ -2,7 +2,7 @@ from flask import Flask, request, render_template, send_file
 from werkzeug.utils import secure_filename
 from pathlib import Path
 from datetime import datetime
-from openpyxl import load_workbook
+from openpyxl import load_workbook, Workbook
 import pdfplumber
 import re, os
 
@@ -195,6 +195,194 @@ def group_rotations(rows, include_a320=False):
     return result
 
 
+def combine_international_flights(arrival, departure):
+    arrival = norm(arrival).upper()
+    departure = norm(departure).upper()
+    if not departure or departure in {'0', '-'}:
+        return arrival
+    if arrival == departure:
+        return arrival
+    # Preserve the common airline prefix and abbreviate only the changing tail.
+    i = 0
+    while i < min(len(arrival), len(departure)) and arrival[i] == departure[i]:
+        i += 1
+    # Never shorten into the airline designator itself.
+    m = re.match(r'^([A-Z0-9]{2})(.*)$', arrival)
+    min_prefix = 2 if m else 0
+    i = max(i, min_prefix)
+    return arrival + '/' + departure[i:]
+
+
+def parse_intl_datetime(value):
+    value = norm(value)
+    m = re.search(r'(\d{2})/(\d{2})\s*-\s*(\d{2}):(\d{2})', value)
+    if not m:
+        return None
+    day, month, hh, mm = map(int, m.groups())
+    if day == 0 or month == 0:
+        return None
+    return {'day': day, 'month': month, 'time': hh * 100 + mm}
+
+
+def parse_international_pdf(pdf_path):
+    """Parse the airport International Schedule table.
+
+    Uses pdfplumber table extraction because this PDF has a column-based layout.
+    Only fields needed by the operational schedule are retained.
+    """
+    records = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            tables = page.extract_tables() or []
+            for table in tables:
+                if not table or len(table) < 2:
+                    continue
+                headers = [norm(x).replace('\n', ' ') for x in table[0]]
+                joined = ' | '.join(headers).lower()
+                if 'arrival identifier' not in joined or 'departure identifier' not in joined:
+                    continue
+
+                def idx(*needles):
+                    for n in needles:
+                        for j, h in enumerate(headers):
+                            if n in h.lower():
+                                return j
+                    return None
+
+                cols = {
+                    'operator': idx('operator'),
+                    'type': idx('aircraft type'),
+                    'arr': idx('arrival identifier'),
+                    'origin': idx('origin'),
+                    'sibt': idx('sibt'),
+                    'dep': idx('departure identifier'),
+                    'dest': idx('destination'),
+                    'sobt': idx('sobt'),
+                }
+                if any(v is None for v in cols.values()):
+                    continue
+
+                for row in table[1:]:
+                    if not row:
+                        continue
+                    def val(key):
+                        j = cols[key]
+                        return norm(row[j] if j < len(row) else '').replace('\n', ' ')
+                    arr = val('arr').upper()
+                    if not arr:
+                        continue
+                    records.append({
+                        'operator': val('operator').upper(),
+                        'type': val('type').upper(),
+                        'arrival': arr,
+                        'origin': val('origin').upper(),
+                        'sibt': val('sibt'),
+                        'departure': val('dep').upper(),
+                        'destination': val('dest').upper(),
+                        'sobt': val('sobt'),
+                    })
+    if not records:
+        raise ValueError('No International Schedule table was found in this PDF.')
+    return records
+
+
+def build_international_schedule(records):
+    # Target operating day = most frequent valid arrival date in the schedule.
+    counts = {}
+    for r in records:
+        dt = parse_intl_datetime(r['sibt'])
+        if dt:
+            key = (dt['day'], dt['month'])
+            counts[key] = counts.get(key, 0) + 1
+    if not counts:
+        raise ValueError('Could not determine the International Schedule operating date.')
+    target_day, target_month = max(counts, key=counts.get)
+
+    blocks = []
+    maldivian = []
+    for r in records:
+        arr_dt = parse_intl_datetime(r['sibt'])
+        dep_dt = parse_intl_datetime(r['sobt'])
+        if r['operator'] == 'MALDIVIAN':
+            maldivian.append((r, arr_dt, dep_dt))
+            continue
+        if not arr_dt or (arr_dt['day'], arr_dt['month']) != (target_day, target_month):
+            continue
+        blocks.append({
+            'flight': combine_international_flights(r['arrival'], r['departure']),
+            'type': r['type'],
+            'reg': '',
+            'routing': f"{r['origin']}-MLE-{r['destination']}" if r['destination'] else f"{r['origin']}-MLE",
+            'sta': arr_dt['time'], 'eta': None,
+            'std': dep_dt['time'] if dep_dt else None, 'atd': None,
+        })
+
+    # Maldivian international flights are rotations: an outbound Q2xxx is paired
+    # with the next-number return Q2xxx+1 on the same operating day.
+    arrivals = {}
+    departures = {}
+    ac_type = 'A320'
+    for r, arr_dt, dep_dt in maldivian:
+        ac_type = r['type'] or ac_type
+        if arr_dt and (arr_dt['day'], arr_dt['month']) == (target_day, target_month):
+            arrivals[r['arrival']] = (r, arr_dt)
+        if r['departure'] and dep_dt and (dep_dt['day'], dep_dt['month']) == (target_day, target_month):
+            departures[r['departure']] = (r, dep_dt)
+
+    for dep_flt, (dep_row, dep_dt) in departures.items():
+        m = re.match(r'^(Q)(\d+)$', dep_flt)
+        if not m:
+            continue
+        return_flt = m.group(1) + str(int(m.group(2)) + 1)
+        if return_flt not in arrivals:
+            continue
+        arr_row, arr_dt = arrivals[return_flt]
+        blocks.append({
+            'flight': combine_international_flights(dep_flt, return_flt),
+            'type': ac_type,
+            'reg': 'IAN',
+            'routing': f"MLE-{dep_row['destination']}-MLE",
+            'sta': arr_dt['time'], 'eta': None,
+            'std': dep_dt['time'], 'atd': None,
+        })
+
+    blocks.sort(key=lambda b: (b['sta'] if b['sta'] is not None else 9999, b['flight']))
+    return blocks, f'{target_day:02d}.{target_month:02d}'
+
+
+def make_international_excel(blocks, date_string):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'International'
+    ws.merge_cells('A1:AN1')
+    ws['A1'] = 'I N T E R N A T I O N A L  F L I G H T S'
+    headers = [
+        'FLIGHT NO.','A/C TYPE','A/C REG','ROUTING','STA','ETA','STD','ATD',
+        'IN','OUT','TALLY','CERTIFY','LOAD PLAN','','','REMARKS','',
+        'LPR','CRT','LCT','LCAT','LCD','NOTOC','DHT','FFM','DCT','LCOT','LUR','DRT','TCT',
+        'LOGGED BY','TIME','LOGGED BY','TIME'
+    ]
+    for c, h in enumerate(headers, 1):
+        ws.cell(3, c).value = h
+    for i, b in enumerate(blocks, 4):
+        vals = [b['flight'], b['type'], b['reg'], b['routing'], b['sta'], b['eta'], b['std'], b['atd']]
+        for c, v in enumerate(vals, 1):
+            ws.cell(i, c).value = v
+    for c in range(1, len(headers)+1):
+        ws.cell(3,c).font = ws.cell(3,c).font.copy(bold=True)
+    ws.freeze_panes = 'A4'
+    ws.column_dimensions['A'].width = 14
+    ws.column_dimensions['B'].width = 11
+    ws.column_dimensions['C'].width = 11
+    ws.column_dimensions['D'].width = 20
+    for col in ['E','F','G','H']:
+        ws.column_dimensions[col].width = 8
+    tag = date_string.replace('.', '_')
+    out = OUT / f'INTERNATIONAL_SKED_{tag}.xlsx'
+    wb.save(out)
+    return out
+
+
 def title_for_date(date_string):
     if not date_string:
         return 'SCHEDULE'
@@ -234,28 +422,36 @@ def make_excel(blocks, date_string):
 @app.route('/', methods=['GET', 'POST'])
 def index():
     result = error = preview = None
+    mode = request.form.get('mode', 'domestic') if request.method == 'POST' else 'domestic'
     if request.method == 'POST':
         f = request.files.get('pdf')
-        include_a320 = request.form.get('include_a320') == '1'
         if not f or not f.filename.lower().endswith('.pdf'):
             error = 'Please select a PDF schedule.'
         else:
             pdf_path = UPLOADS / secure_filename(f.filename)
             f.save(pdf_path)
             try:
-                date_string, rows = parse_pdf(pdf_path)
-                blocks = group_rotations(rows, include_a320=include_a320)
-                if not blocks:
-                    raise ValueError('No schedule blocks remained after applying the selected rules.')
-                out = make_excel(blocks, date_string)
-                preview = blocks
-                result = {
-                    'filename': out.name, 'count': len(blocks), 'rows': len(rows),
-                    'date': date_string or 'unknown', 'a320': include_a320,
-                }
+                if mode == 'international':
+                    records = parse_international_pdf(pdf_path)
+                    blocks, date_string = build_international_schedule(records)
+                    if not blocks:
+                        raise ValueError('No International schedule rows remained after applying the rules.')
+                    out = make_international_excel(blocks, date_string)
+                    preview = blocks
+                    result = {'filename': out.name, 'count': len(blocks), 'rows': len(records),
+                              'date': date_string, 'mode': 'international'}
+                else:
+                    date_string, rows = parse_pdf(pdf_path)
+                    blocks = group_rotations(rows, include_a320=False)
+                    if not blocks:
+                        raise ValueError('No Domestic schedule blocks remained after applying the rules.')
+                    out = make_excel(blocks, date_string)
+                    preview = blocks
+                    result = {'filename': out.name, 'count': len(blocks), 'rows': len(rows),
+                              'date': date_string or 'unknown', 'mode': 'domestic'}
             except Exception as exc:
                 error = str(exc)
-    return render_template('index.html', result=result, error=error, preview=preview)
+    return render_template('index.html', result=result, error=error, preview=preview, mode=mode)
 
 
 @app.route('/download/<path:name>')
