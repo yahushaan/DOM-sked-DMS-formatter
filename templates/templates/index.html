@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MDV Schedule Converter</title>
+<style>
+body{font-family:Arial,sans-serif;background:#f4f6f8;margin:0;color:#1f2937}
+.wrap{max-width:1100px;margin:35px auto;padding:20px}
+.card{background:#fff;border-radius:14px;padding:28px;box-shadow:0 5px 25px rgba(0,0,0,.08)}
+h1{margin:0 0 8px}
+.mode{display:flex;gap:14px;justify-content:center;margin:16px 0}
+.mode label{background:#eef2f7;padding:10px 16px;border-radius:8px}
+.upload-zone{border:2px dashed #9ca3af;border-radius:12px;padding:38px 24px;text-align:center;margin:20px 0;background:#fafafa;cursor:pointer;transition:.2s ease}
+.upload-zone:hover,.upload-zone.dragover{border-color:#2563eb;background:#eff6ff}
+.upload-icon{font-size:38px;margin-bottom:8px}
+.upload-title{font-size:17px;font-weight:700}
+.upload-hint{color:#6b7280;font-size:13px;margin-top:6px}
+.file-name{margin-top:14px;font-weight:700;color:#2563eb;word-break:break-word}
+.file-input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+button{background:#111827;color:#fff;border:0;border-radius:8px;padding:12px 22px;font-size:16px;cursor:pointer}
+button:disabled{opacity:.55;cursor:not-allowed}
+.actions{text-align:center;margin-bottom:20px}
+.ok{background:#ecfdf5;border:1px solid #10b981;padding:15px;border-radius:8px}
+.err{background:#fef2f2;border:1px solid #ef4444;padding:15px;border-radius:8px}
+.small{color:#6b7280;font-size:13px;line-height:1.5}
+a{color:#2563eb;text-decoration:none;font-weight:bold}
+.table-wrap{overflow:auto;margin-top:20px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border:1px solid #d1d5db;padding:7px 8px;text-align:left;white-space:nowrap}
+th{background:#f3f4f6}
+@media(max-width:700px){.wrap{margin:10px auto;padding:10px}.card{padding:18px}.mode{flex-direction:column}}
+</style>
+</head>
+<body>
+<div class="wrap"><div class="card">
+<h1>MDV Schedule Converter</h1>
+<p>Convert Domestic or International schedule PDFs into the required operational Excel format.</p>
+
+<form method="post" enctype="multipart/form-data" id="convertForm">
+<strong>Schedule type</strong>
+<div class="mode">
+<label><input type="radio" name="mode" value="domestic" {% if mode != 'international' %}checked{% endif %}> Domestic</label>
+<label><input type="radio" name="mode" value="international" {% if mode == 'international' %}checked{% endif %}> International</label>
+</div>
+
+<input id="pdfInput" class="file-input" type="file" name="pdf" accept=".pdf,application/pdf" required>
+
+<div id="dropZone" class="upload-zone" role="button" tabindex="0" aria-label="Upload schedule PDF">
+<div class="upload-icon">⇧</div>
+<div class="upload-title">Drag &amp; drop your schedule PDF here</div>
+<div class="upload-hint">or click anywhere in this box to choose a PDF</div>
+<div id="fileName" class="file-name">No file selected</div>
+</div>
+
+<div class="actions"><button id="convertBtn" type="submit">Convert to Excel</button></div>
+</form>
+
+{% if error %}<div class="err"><strong>Could not convert:</strong><br>{{error}}</div>{% endif %}
+{% if result %}<div class="ok"><strong>Conversion complete — {{result.mode|capitalize}}.</strong><br>{{result.rows}} source rows → {{result.count}} schedule rows. Schedule date: {{result.date}}.<br><br><a href="{{url_for('download',name=result.filename)}}">Download {{result.filename}}</a></div>{% endif %}
+
+{% if preview %}
+<div class="table-wrap"><h3>{{result.mode|capitalize}} schedule preview</h3>
+<table><thead><tr><th>FLIGHT NO.</th><th>A/C TYPE</th><th>A/C REG</th><th>ROUTING</th>
+{% if result.mode == 'international' %}<th>STA</th><th>ETA</th><th>STD</th><th>ATD</th>
+{% else %}<th>STD</th><th>ATD</th><th>STA</th><th>ETA</th>{% endif %}
+</tr></thead><tbody>
+{% for b in preview %}<tr><td>{{b.flight}}</td><td>{{b.type}}</td><td>{{b.reg}}</td><td>{{b.routing}}</td>
+{% if result.mode == 'international' %}<td>{{b.sta or ''}}</td><td>{{b.eta or ''}}</td><td>{{b.std or ''}}</td><td>{{b.atd or ''}}</td>
+{% else %}<td>{{b.std or ''}}</td><td>{{b.atd or ''}}</td><td>{{b.sta or ''}}</td><td>{{b.eta or ''}}</td>{% endif %}
+</tr>{% endfor %}
+</tbody></table></div>
+{% endif %}
+
+<p class="small">Domestic uses the established MDV iFlight logic. International uses the airport arrival/departure table, pairs turnaround flights, reconstructs Maldivian international rotations, and leaves freighter/manual operational entries for later phases.</p>
+</div></div>
+
+<script>
+const dropZone = document.getElementById('dropZone');
+const pdfInput = document.getElementById('pdfInput');
+const fileName = document.getElementById('fileName');
+const form = document.getElementById('convertForm');
+const convertBtn = document.getElementById('convertBtn');
+
+function showFile(file){
+  if(!file){ fileName.textContent='No file selected'; return; }
+  if(!file.name.toLowerCase().endsWith('.pdf')){
+    fileName.textContent='Please select a PDF file.';
+    pdfInput.value='';
+    return;
+  }
+  fileName.textContent=file.name;
+}
+
+dropZone.addEventListener('click',()=>pdfInput.click());
+dropZone.addEventListener('keydown',(e)=>{
+  if(e.key==='Enter'||e.key===' '){e.preventDefault();pdfInput.click();}
+});
+pdfInput.addEventListener('change',()=>showFile(pdfInput.files[0]));
+
+['dragenter','dragover'].forEach(evt=>dropZone.addEventListener(evt,(e)=>{
+  e.preventDefault();e.stopPropagation();dropZone.classList.add('dragover');
+}));
+['dragleave','drop'].forEach(evt=>dropZone.addEventListener(evt,(e)=>{
+  e.preventDefault();e.stopPropagation();dropZone.classList.remove('dragover');
+}));
+dropZone.addEventListener('drop',(e)=>{
+  const files=e.dataTransfer.files;
+  if(!files.length)return;
+  const file=files[0];
+  if(!file.name.toLowerCase().endsWith('.pdf')){
+    fileName.textContent='Please drop a PDF file.';
+    return;
+  }
+  const dt=new DataTransfer();
+  dt.items.add(file);
+  pdfInput.files=dt.files;
+  showFile(file);
+});
+
+form.addEventListener('submit',()=>{
+  convertBtn.disabled=true;
+  convertBtn.textContent='Converting...';
+});
+</script>
+</body>
+</html>
