@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MDV Schedule Converter</title>
+<style>
+body{font-family:Arial,sans-serif;background:#f4f6f8;margin:0;color:#1f2937}.wrap{max-width:1050px;margin:35px auto;padding:20px}.card{background:#fff;border-radius:14px;padding:28px;box-shadow:0 5px 25px rgba(0,0,0,.08)}h1{margin:0 0 8px}.drop{border:2px dashed #9ca3af;border-radius:12px;padding:28px;text-align:center;margin:20px 0;background:#fafafa}input[type=file]{margin:14px 0}button{background:#111827;color:#fff;border:0;border-radius:8px;padding:12px 22px;font-size:16px;cursor:pointer}.option{margin:10px 0 18px}.ok{background:#ecfdf5;border:1px solid #10b981;padding:15px;border-radius:8px}.err{background:#fef2f2;border:1px solid #ef4444;padding:15px;border-radius:8px}.small{color:#6b7280;font-size:13px;line-height:1.5}a{color:#2563eb;text-decoration:none;font-weight:bold}.rules{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0}.rule{background:#f8fafc;padding:11px;border-radius:8px;font-size:14px}.table-wrap{overflow:auto;margin-top:20px}table{border-collapse:collapse;width:100%;font-size:13px}th,td{border:1px solid #d1d5db;padding:7px 8px;text-align:left;white-space:nowrap}th{background:#f3f4f6}.badge{display:inline-block;background:#e5e7eb;border-radius:999px;padding:3px 8px;font-size:12px}
+@media(max-width:700px){.rules{grid-template-columns:1fr}.wrap{margin:10px auto;padding:10px}.card{padding:18px}}
+</style>
+</head>
+<body><div class="wrap"><div class="card">
+<h1>MDV Schedule Converter</h1>
+<p>Upload the iFlight Lite Daily OPS Schedule PDF and generate the required MDV Schedule Excel.</p>
+<form method="post" enctype="multipart/form-data">
+<div class="drop"><strong>Daily OPS Schedule PDF</strong><br><input type="file" name="pdf" accept="application/pdf" required><br>
+<div class="option"><label><input type="checkbox" name="include_a320" value="1"> Include A320 / international rotations</label><br><span class="small">Default is OFF to match the current required Schedule format.</span></div>
+<button type="submit">Convert to Excel</button></div>
+</form>
+{% if error %}<div class="err"><strong>Could not convert:</strong><br>{{error}}</div>{% endif %}
+{% if result %}<div class="ok"><strong>Conversion complete.</strong><br>
+{{result.rows}} PDF flight-sector rows → {{result.count}} Schedule blocks. Schedule date: {{result.date}}.
+{% if result.a320 %}<br>A320/international rotations were included.{% else %}<br>A320/international rotations were excluded to match the required format.{% endif %}
+<br><br><a href="{{url_for('download',name=result.filename)}}">Download {{result.filename}}</a></div>{% endif %}
+{% if preview %}
+<div class="table-wrap"><h3>Schedule preview</h3><table><thead><tr><th>FLIGHT NO.</th><th>A/C TYPE</th><th>A/C REG</th><th>ROUTING</th><th>STD</th><th>ATD</th><th>STA</th><th>ETA</th></tr></thead><tbody>
+{% for b in preview %}<tr><td>{{b.flight}}</td><td>{{b.type}}</td><td>{{b.reg}}</td><td>{{b.routing}}</td><td>{{b.std or ''}}</td><td>{{b.atd or ''}}</td><td>{{b.sta or ''}}</td><td>{{b.eta or ''}}</td></tr>{% endfor %}
+</tbody></table></div>
+{% endif %}
+<div class="rules"><div class="rule">✓ Groups multi-sector rotations</div><div class="rule">✓ Converts Q flight numbers to Q2 format</div><div class="rule">✓ Combines paired flights (e.g. 300/1)</div><div class="rule">✓ Builds routing automatically</div><div class="rule">✓ Arrival-first, then departure sorting</div><div class="rule">✓ Uses the required Excel format</div></div>
+<p class="small">Internal-use application. Files are processed locally on the computer/server running this application. The parser is tuned to the iFlight Lite Daily OPS Schedule format supplied for this project.</p>
+</div></div></body></html>
