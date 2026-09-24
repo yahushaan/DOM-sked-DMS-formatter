@@ -31,7 +31,10 @@ def excel_time(s):
     if not s or not TIME_RE.fullmatch(s):
         return None
     n = int(s)
-    return n if n <= 2359 else None
+    if n > 2359:
+        return None
+    # Keep operational times as 4-digit 24-hour text, e.g. 515 -> 0515.
+    return f'{n:04d}'
 
 
 def extract_schedule_date(text):
@@ -221,7 +224,7 @@ def parse_intl_datetime(value):
     day, month, hh, mm = map(int, m.groups())
     if day == 0 or month == 0:
         return None
-    return {'day': day, 'month': month, 'time': hh * 100 + mm}
+    return {'day': day, 'month': month, 'time': f'{hh:02d}{mm:02d}'}
 
 
 def parse_international_pdf(pdf_path):
