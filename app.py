@@ -225,66 +225,46 @@ def parse_intl_datetime(value):
 
 
 def parse_international_pdf(pdf_path):
-    """Parse the airport International Schedule table.
+    """Parse the AOCC Daily International Schedule PDF.
 
-    Uses pdfplumber table extraction because this PDF has a column-based layout.
-    Only fields needed by the operational schedule are retained.
+    The source PDF visually has many columns, but pdfplumber may merge them into
+    a small number of cells. Parsing the extracted text rows is therefore more
+    reliable for this specific AOCC layout than requiring individual table cells.
     """
     records = []
+    row_re = re.compile(
+        r'^(.*?)\s+([AB][A-Z0-9]{3})\s+([A-Z0-9]+)\s+([A-Z]{3})\s+'
+        r'(\d{2}/\d{2}\s*-\s*\d{2}:\d{2}).*?Scheduled'
+        r'(?:\s+([A-Z0-9]+)\s+([A-Z]{3})\s+'
+        r'(\d{2}/\d{2}\s*-\s*\d{2}:\d{2}))?'
+    )
+
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            tables = page.extract_tables() or []
-            for table in tables:
-                if not table or len(table) < 2:
+            text = page.extract_text() or ''
+            for raw_line in text.splitlines():
+                line = norm(raw_line).replace('–', '-').replace('—', '-')
+                m = row_re.match(line)
+                if not m:
                     continue
-                headers = [norm(x).replace('\n', ' ') for x in table[0]]
-                joined = ' | '.join(headers).lower()
-                if 'arrival identifier' not in joined or 'departure identifier' not in joined:
-                    continue
+                operator, ac_type, arrival, origin, sibt, departure, destination, sobt = m.groups()
+                records.append({
+                    'operator': norm(operator).upper(),
+                    'type': norm(ac_type).upper(),
+                    'arrival': norm(arrival).upper(),
+                    'origin': norm(origin).upper(),
+                    'sibt': norm(sibt),
+                    'departure': norm(departure).upper() if departure else '',
+                    'destination': norm(destination).upper() if destination else '',
+                    'sobt': norm(sobt) if sobt else '',
+                })
 
-                def idx(*needles):
-                    for n in needles:
-                        for j, h in enumerate(headers):
-                            if n in h.lower():
-                                return j
-                    return None
-
-                cols = {
-                    'operator': idx('operator'),
-                    'type': idx('aircraft type'),
-                    'arr': idx('arrival identifier'),
-                    'origin': idx('origin'),
-                    'sibt': idx('sibt'),
-                    'dep': idx('departure identifier'),
-                    'dest': idx('destination'),
-                    'sobt': idx('sobt'),
-                }
-                if any(v is None for v in cols.values()):
-                    continue
-
-                for row in table[1:]:
-                    if not row:
-                        continue
-                    def val(key):
-                        j = cols[key]
-                        return norm(row[j] if j < len(row) else '').replace('\n', ' ')
-                    arr = val('arr').upper()
-                    if not arr:
-                        continue
-                    records.append({
-                        'operator': val('operator').upper(),
-                        'type': val('type').upper(),
-                        'arrival': arr,
-                        'origin': val('origin').upper(),
-                        'sibt': val('sibt'),
-                        'departure': val('dep').upper(),
-                        'destination': val('dest').upper(),
-                        'sobt': val('sobt'),
-                    })
     if not records:
-        raise ValueError('No International Schedule table was found in this PDF.')
+        raise ValueError(
+            'No International Schedule rows were found. '
+            'Please upload the AOCC Daily International Schedule PDF.'
+        )
     return records
-
 
 def build_international_schedule(records):
     # Target operating day = most frequent valid arrival date in the schedule.
