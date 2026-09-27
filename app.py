@@ -230,36 +230,47 @@ def parse_intl_datetime(value):
 def parse_international_pdf(pdf_path):
     """Parse the AOCC Daily International Schedule PDF.
 
-    The source PDF visually has many columns, but pdfplumber may merge them into
-    a small number of cells. Parsing the extracted text rows is therefore more
-    reliable for this specific AOCC layout than requiring individual table cells.
+    Parse each row in two stages so a changed arrival status (for example
+    Landed instead of Scheduled) cannot hide a valid departure flight.
     """
     records = []
-    row_re = re.compile(
+    prefix_re = re.compile(
         r'^(.*?)\s+([AB][A-Z0-9]{3})\s+([A-Z0-9]+)\s+([A-Z]{3})\s+'
-        r'(\d{2}/\d{2}\s*-\s*\d{2}:\d{2}).*?Scheduled'
-        r'(?:\s+([A-Z0-9]+)\s+([A-Z]{3})\s+'
-        r'(\d{2}/\d{2}\s*-\s*\d{2}:\d{2}))?'
+        r'(\d{2}/\d{2}\s*-\s*\d{2}:\d{2})'
+    )
+    departure_re = re.compile(
+        r'\b([A-Z0-9]+)\s+([A-Z]{3})\s+'
+        r'(\d{2}/\d{2}\s*-\s*\d{2}:\d{2})'
     )
 
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            text = page.extract_text() or ''
-            for raw_line in text.splitlines():
+            page_text = page.extract_text() or ''
+            for raw_line in page_text.splitlines():
                 line = norm(raw_line).replace('–', '-').replace('—', '-')
-                m = row_re.match(line)
+                m = prefix_re.match(line)
                 if not m:
                     continue
-                operator, ac_type, arrival, origin, sibt, departure, destination, sobt = m.groups()
+
+                operator, ac_type, arrival, origin, sibt = m.groups()
+                remainder = line[m.end():]
+                d = departure_re.search(remainder)
+
+                departure = destination = sobt = ''
+                if d:
+                    dep, dest, dep_time = d.groups()
+                    if dep != '0':
+                        departure, destination, sobt = dep, dest, dep_time
+
                 records.append({
                     'operator': norm(operator).upper(),
                     'type': norm(ac_type).upper(),
                     'arrival': norm(arrival).upper(),
                     'origin': norm(origin).upper(),
                     'sibt': norm(sibt),
-                    'departure': norm(departure).upper() if departure else '',
-                    'destination': norm(destination).upper() if destination else '',
-                    'sobt': norm(sobt) if sobt else '',
+                    'departure': norm(departure).upper(),
+                    'destination': norm(destination).upper(),
+                    'sobt': norm(sobt),
                 })
 
     if not records:
