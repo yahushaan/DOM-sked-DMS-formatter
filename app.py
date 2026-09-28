@@ -312,7 +312,34 @@ def build_international_schedule(records):
         arr_dt = parse_intl_datetime(r['sibt'])
         dep_dt = parse_intl_datetime(r['sobt'])
         if r['operator'] == 'MALDIVIAN':
-            maldivian.append((r, arr_dt, dep_dt))
+            # Preserve the existing paired Q2 rotation logic (e.g. Q2701/0,
+            # Q2707/6), but also support Maldivian through-flights contained
+            # in one AOCC row with non-consecutive flight numbers.
+            sequential_pair = False
+            if r['arrival'] and r['departure']:
+                ma = re.match(r'^Q(\d+)$', r['arrival'])
+                md = re.match(r'^Q(\d+)$', r['departure'])
+                if ma and md:
+                    sequential_pair = abs(int(ma.group(1)) - int(md.group(1))) == 1
+
+            same_target_day = (
+                arr_dt and dep_dt and
+                (arr_dt['day'], arr_dt['month']) == (target_day, target_month) and
+                (dep_dt['day'], dep_dt['month']) == (target_day, target_month)
+            )
+
+            if same_target_day and r['departure'] and not sequential_pair:
+                reg_map = {'A332': 'IAB'}
+                blocks.append({
+                    'flight': combine_international_flights(r['arrival'], r['departure']),
+                    'type': r['type'],
+                    'reg': reg_map.get(r['type'], ''),
+                    'routing': f"{r['origin']}-MLE-{r['destination']}",
+                    'sta': arr_dt['time'], 'eta': None,
+                    'std': dep_dt['time'], 'atd': None,
+                })
+            else:
+                maldivian.append((r, arr_dt, dep_dt))
             continue
         if not arr_dt or (arr_dt['day'], arr_dt['month']) != (target_day, target_month):
             continue
