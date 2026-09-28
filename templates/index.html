@@ -20,7 +20,7 @@ h1{margin:0 0 8px}
 .file-input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 button{background:#111827;color:#fff;border:0;border-radius:8px;padding:12px 22px;font-size:16px;cursor:pointer}
 button:disabled{opacity:.55;cursor:not-allowed}
-.actions{text-align:center;margin-bottom:20px}
+.freighter-option{display:none;margin:8px 0 16px;padding:14px 16px;background:#f8fafc;border:1px solid #d1d5db;border-radius:10px}.freighter-option label{font-weight:700;cursor:pointer}.freighter-upload{display:none}.actions{text-align:center;margin-bottom:20px}
 .ok{background:#ecfdf5;border:1px solid #10b981;padding:15px;border-radius:8px}
 .err{background:#fef2f2;border:1px solid #ef4444;padding:15px;border-radius:8px}
 .small{color:#6b7280;font-size:13px;line-height:1.5}
@@ -53,11 +53,26 @@ th{background:#f3f4f6}
 <div id="fileName" class="file-name">No file selected</div>
 </div>
 
+<div id="freighterOption" class="freighter-option">
+<label><input id="includeFreighter" type="checkbox" name="include_freighter" {% if include_freighter %}checked{% endif %}> Include Freighter Schedule (DAILY ADHOC)</label>
+<div class="upload-hint">Only RAYA AIRWAYS (TH) and AFCOM HOLDING PVT LTD (O9) will be included.</div>
+</div>
+
+<div id="freighterUpload" class="freighter-upload">
+<input id="freighterPdfInput" class="file-input" type="file" name="freighter_pdf" accept=".pdf,application/pdf">
+<div id="freighterDropZone" class="upload-zone" role="button" tabindex="0" aria-label="Upload DAILY ADHOC freighter PDF">
+<div class="upload-icon">⇧</div>
+<div class="upload-title">Drag &amp; drop DAILY ADHOC freighter PDF here</div>
+<div class="upload-hint">or click anywhere in this box to choose the second PDF</div>
+<div id="freighterFileName" class="file-name">No freighter file selected</div>
+</div>
+</div>
+
 <div class="actions"><button id="convertBtn" type="submit">Convert to Excel</button></div>
 </form>
 
 {% if error %}<div class="err"><strong>Could not convert:</strong><br>{{error}}</div>{% endif %}
-{% if result %}<div class="ok"><strong>Conversion complete — {{result.mode|capitalize}}.</strong><br>{{result.rows}} source rows → {{result.count}} schedule rows. Schedule date: {{result.date}}.<br><br><a href="{{url_for('download',name=result.filename)}}">Download {{result.filename}}</a></div>{% endif %}
+{% if result %}<div class="ok"><strong>Conversion complete — {{result.mode|capitalize}}.</strong><br>{{result.rows}} source rows → {{result.count}} schedule rows. Schedule date: {{result.date}}.{% if result.freighter_count %} Included {{result.freighter_count}} approved freighter movement(s).{% endif %}<br><br><a href="{{url_for('download',name=result.filename)}}">Download {{result.filename}}</a></div>{% endif %}
 
 {% if preview %}
 <div class="table-wrap"><h3>{{result.mode|capitalize}} schedule preview</h3>
@@ -72,7 +87,7 @@ th{background:#f3f4f6}
 </tbody></table></div>
 {% endif %}
 
-<p class="small">Domestic uses the established MDV iFlight logic. International uses the airport arrival/departure table, pairs turnaround flights, reconstructs Maldivian international rotations, and leaves freighter/manual operational entries for later phases.</p>
+<p class="small">Domestic uses the established MDV iFlight logic. International uses the Daily International schedule and can optionally merge approved freighters from the Daily ADHOC schedule (RAYA AIRWAYS TH and AFCOM HOLDING PVT LTD O9).</p>
 </div></div>
 
 <script>
@@ -117,6 +132,58 @@ dropZone.addEventListener('drop',(e)=>{
   pdfInput.files=dt.files;
   showFile(file);
 });
+
+
+const freighterOption = document.getElementById('freighterOption');
+const includeFreighter = document.getElementById('includeFreighter');
+const freighterUpload = document.getElementById('freighterUpload');
+const freighterPdfInput = document.getElementById('freighterPdfInput');
+const freighterDropZone = document.getElementById('freighterDropZone');
+const freighterFileName = document.getElementById('freighterFileName');
+const modeRadios = document.querySelectorAll('input[name="mode"]');
+
+function updateFreighterUI(){
+  const international = document.querySelector('input[name="mode"]:checked').value === 'international';
+  freighterOption.style.display = international ? 'block' : 'none';
+  freighterUpload.style.display = international && includeFreighter.checked ? 'block' : 'none';
+  freighterPdfInput.required = international && includeFreighter.checked;
+  if(!international){
+    includeFreighter.checked = false;
+    freighterPdfInput.required = false;
+    freighterUpload.style.display = 'none';
+  }
+}
+modeRadios.forEach(r=>r.addEventListener('change',updateFreighterUI));
+includeFreighter.addEventListener('change',updateFreighterUI);
+
+freighterDropZone.addEventListener('click',()=>freighterPdfInput.click());
+freighterDropZone.addEventListener('keydown',(e)=>{
+  if(e.key==='Enter'||e.key===' '){e.preventDefault();freighterPdfInput.click();}
+});
+freighterPdfInput.addEventListener('change',()=>{
+  const f=freighterPdfInput.files[0];
+  freighterFileName.textContent=f ? f.name : 'No freighter file selected';
+});
+['dragenter','dragover'].forEach(evt=>freighterDropZone.addEventListener(evt,(e)=>{
+  e.preventDefault();e.stopPropagation();freighterDropZone.classList.add('dragover');
+}));
+['dragleave','drop'].forEach(evt=>freighterDropZone.addEventListener(evt,(e)=>{
+  e.preventDefault();e.stopPropagation();freighterDropZone.classList.remove('dragover');
+}));
+freighterDropZone.addEventListener('drop',(e)=>{
+  const files=e.dataTransfer.files;
+  if(!files.length)return;
+  const file=files[0];
+  if(!file.name.toLowerCase().endsWith('.pdf')){
+    freighterFileName.textContent='Please drop a PDF file.';
+    return;
+  }
+  const dt=new DataTransfer();
+  dt.items.add(file);
+  freighterPdfInput.files=dt.files;
+  freighterFileName.textContent=file.name;
+});
+updateFreighterUI();
 
 form.addEventListener('submit',()=>{
   convertBtn.disabled=true;
