@@ -332,7 +332,7 @@ def build_international_schedule(records):
             continue
         arr_row, arr_dt = arrivals[return_flt]
         blocks.append({
-            'flight': combine_international_flights(dep_flt, return_flt),
+            'flight': combine_international_flights(return_flt, dep_flt),
             'type': ac_type,
             'reg': 'IAN',
             'routing': f"MLE-{dep_row['destination']}-MLE",
