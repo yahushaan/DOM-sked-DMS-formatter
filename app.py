@@ -248,6 +248,20 @@ def parse_international_pdf(pdf_path):
             page_text = page.extract_text() or ''
             for raw_line in page_text.splitlines():
                 line = norm(raw_line).replace('–', '-').replace('—', '-')
+
+                # AOCC PDF extraction can join the arrival status directly to
+                # the departure identifier, e.g. "ScheduledEY379".
+                # Restore that missing boundary before locating the departure.
+                line = re.sub(
+                    r'(?i)(Scheduled|Landed|Cancelled)(?=[A-Z0-9])',
+                    r'\1 ',
+                    line
+                )
+
+                # Cancelled rows are not part of the operational schedule.
+                if re.search(r'(?i)\bCancelled\b', line):
+                    continue
+
                 m = prefix_re.match(line)
                 if not m:
                     continue
