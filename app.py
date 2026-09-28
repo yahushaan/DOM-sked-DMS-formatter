@@ -344,6 +344,75 @@ def build_international_schedule(records):
     return blocks, f'{target_day:02d}.{target_month:02d}'
 
 
+
+def parse_freighter_pdf(pdf_path, target_day, target_month):
+    """Read only RAYA AIRWAYS (TH) and AFCOM HOLDING PVT LTD (O9)."""
+    blocks = []
+
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            page_text = page.extract_text() or ''
+            for raw_line in page_text.splitlines():
+                line = norm(raw_line).replace('–', '-').replace('—', '-')
+                upper = line.upper()
+
+                if 'RAYA AIRWAYS' in upper:
+                    operator = 'RAYA AIRWAYS'
+                    prefix = 'TH'
+                    reg = ''
+                elif 'AFCOM HOLDING PVT LTD' in upper:
+                    operator = 'AFCOM HOLDING PVT LTD'
+                    prefix = 'O9'
+                    reg_match = re.search(r'AFCOM HOLDING PVT LTD\s+B738\s+([A-Z0-9-]+)', upper)
+                    reg = reg_match.group(1) if reg_match else ''
+                else:
+                    continue
+
+                ac_match = re.search(re.escape(operator) + r'\s+([A-Z0-9]+)', upper)
+                if not ac_match:
+                    continue
+                ac_type = ac_match.group(1)
+
+                # pdfplumber sometimes joins adjacent cells (e.g. 0TH301 or
+                # ScheduledTH302), so locate the approved flight identifiers
+                # directly instead of relying on cell-boundary spaces.
+                movement_re = re.compile(
+                    rf'({prefix}\d+)\s+([A-Z]{{3}})\s+\S+\s+'
+                    rf'(\d{{2}}/\d{{2}}\s*-\s*\d{{2}}:\d{{2}})',
+                    re.I
+                )
+                moves = movement_re.findall(upper)
+                if len(moves) < 2:
+                    continue
+
+                arrival, origin, sibt = moves[0]
+                departure, destination, sobt = moves[1]
+                arr_dt = parse_intl_datetime(sibt)
+                dep_dt = parse_intl_datetime(sobt)
+
+                if not arr_dt or (arr_dt['day'], arr_dt['month']) != (target_day, target_month):
+                    continue
+
+                blocks.append({
+                    'flight': combine_international_flights(arrival, departure),
+                    'type': ac_type,
+                    'reg': reg,
+                    'routing': f"{origin}-MLE-{destination}",
+                    'sta': arr_dt['time'],
+                    'eta': None,
+                    'std': dep_dt['time'] if dep_dt else None,
+                    'atd': None,
+                })
+
+    return blocks
+
+def add_freighters_to_international(blocks, freighter_pdf, date_string):
+    day, month = map(int, date_string.split('.')[:2])
+    freighters = parse_freighter_pdf(freighter_pdf, day, month)
+    combined = blocks + freighters
+    combined.sort(key=lambda b: (b['sta'] if b['sta'] is not None else '9999', b['flight']))
+    return combined, len(freighters)
+
 def make_international_excel(blocks, date_string):
     wb = Workbook()
     ws = wb.active
@@ -417,6 +486,8 @@ def make_excel(blocks, date_string):
 def index():
     result = error = preview = None
     mode = request.form.get('mode', 'domestic') if request.method == 'POST' else 'domestic'
+    include_freighter = request.form.get('include_freighter') == 'on' if request.method == 'POST' else False
+
     if request.method == 'POST':
         f = request.files.get('pdf')
         if not f or not f.filename.lower().endswith('.pdf'):
@@ -428,12 +499,39 @@ def index():
                 if mode == 'international':
                     records = parse_international_pdf(pdf_path)
                     blocks, date_string = build_international_schedule(records)
+                    freighter_count = 0
+
+                    if include_freighter:
+                        ff = request.files.get('freighter_pdf')
+                        if not ff or not ff.filename.lower().endswith('.pdf'):
+                            raise ValueError(
+                                'Include Freighter Schedule is selected. '
+                                'Please upload the DAILY ADHOC SCHEDULE PDF as the second file.'
+                            )
+                        freighter_path = UPLOADS / secure_filename(ff.filename)
+                        ff.save(freighter_path)
+                        blocks, freighter_count = add_freighters_to_international(
+                            blocks, freighter_path, date_string
+                        )
+                        if freighter_count == 0:
+                            raise ValueError(
+                                'No RAYA AIRWAYS (TH) or AFCOM HOLDING PVT LTD (O9) '
+                                'movements were found for the International schedule date.'
+                            )
+
                     if not blocks:
                         raise ValueError('No International schedule rows remained after applying the rules.')
+
                     out = make_international_excel(blocks, date_string)
                     preview = blocks
-                    result = {'filename': out.name, 'count': len(blocks), 'rows': len(records),
-                              'date': date_string, 'mode': 'international'}
+                    result = {
+                        'filename': out.name,
+                        'count': len(blocks),
+                        'rows': len(records),
+                        'date': date_string,
+                        'mode': 'international',
+                        'freighter_count': freighter_count
+                    }
                 else:
                     date_string, rows = parse_pdf(pdf_path)
                     blocks = group_rotations(rows, include_a320=False)
@@ -445,7 +543,15 @@ def index():
                               'date': date_string or 'unknown', 'mode': 'domestic'}
             except Exception as exc:
                 error = str(exc)
-    return render_template('index.html', result=result, error=error, preview=preview, mode=mode)
+
+    return render_template(
+        'index.html',
+        result=result,
+        error=error,
+        preview=preview,
+        mode=mode,
+        include_freighter=include_freighter
+    )
 
 
 @app.route('/download/<path:name>')
