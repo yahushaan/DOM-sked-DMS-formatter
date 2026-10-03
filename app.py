@@ -259,7 +259,7 @@ def parse_international_pdf(pdf_path):
                 )
 
                 # Cancelled rows are not part of the operational schedule.
-                if re.search(r'(?i)\bCancelled\b', line):
+                if 'CANCELLED' in line.upper():
                     continue
 
                 m = prefix_re.match(line)
@@ -364,6 +364,8 @@ def build_international_schedule(records):
         if r['departure'] and dep_dt and (dep_dt['day'], dep_dt['month']) == (target_day, target_month):
             departures[r['departure']] = (r, dep_dt)
 
+    paired_arrivals = set()
+    paired_departures = set()
     for dep_flt, (dep_row, dep_dt) in departures.items():
         m = re.match(r'^(Q)(\d+)$', dep_flt)
         if not m:
@@ -374,14 +376,43 @@ def build_international_schedule(records):
         arr_row, arr_dt = arrivals[return_flt]
         blocks.append({
             'flight': combine_international_flights(return_flt, dep_flt),
-            'type': ac_type,
+            'type': dep_row['type'] or arr_row['type'] or ac_type,
             'reg': 'IAN',
             'routing': f"MLE-{dep_row['destination']}-MLE",
             'sta': arr_dt['time'], 'eta': None,
             'std': dep_dt['time'], 'atd': None,
         })
+        paired_arrivals.add(return_flt)
+        paired_departures.add(dep_flt)
 
-    blocks.sort(key=lambda b: (b['sta'] if b['sta'] is not None else 9999, b['flight']))
+    # Keep unpaired Maldivian movements too. These occur when only one side of
+    # a Q2 movement falls on the operating day, e.g. Q2503 arriving DAC-MLE,
+    # or Q2956 departing MLE-MEL after its inbound aircraft arrived the day before.
+    for arr_flt, (arr_row, arr_dt) in arrivals.items():
+        if arr_flt in paired_arrivals:
+            continue
+        blocks.append({
+            'flight': arr_flt,
+            'type': arr_row['type'],
+            'reg': '8QIAN' if arr_row['type'] == 'A320' else ('IAB' if arr_row['type'] == 'A332' else ''),
+            'routing': f"{arr_row['origin']}-MLE",
+            'sta': arr_dt['time'], 'eta': None,
+            'std': None, 'atd': None,
+        })
+
+    for dep_flt, (dep_row, dep_dt) in departures.items():
+        if dep_flt in paired_departures:
+            continue
+        blocks.append({
+            'flight': dep_flt,
+            'type': dep_row['type'],
+            'reg': '8QIAN' if dep_row['type'] == 'A320' else ('IAB' if dep_row['type'] == 'A332' else ''),
+            'routing': f"MLE-{dep_row['destination']}",
+            'sta': None, 'eta': None,
+            'std': dep_dt['time'], 'atd': None,
+        })
+
+    blocks.sort(key=lambda b: (b['sta'] if b['sta'] is not None else '9999', b['flight']))
     return blocks, f'{target_day:02d}.{target_month:02d}'
 
 
