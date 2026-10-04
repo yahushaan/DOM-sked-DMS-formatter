@@ -328,7 +328,7 @@ def build_international_schedule(records):
                 (dep_dt['day'], dep_dt['month']) == (target_day, target_month)
             )
 
-            if same_target_day and r['departure'] and not sequential_pair:
+            if same_target_day and r['departure'] and not sequential_pair and r['type'] == 'A332':
                 reg_map = {'A332': 'IAB'}
                 blocks.append({
                     'flight': combine_international_flights(r['arrival'], r['departure']),
