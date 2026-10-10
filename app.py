@@ -262,6 +262,14 @@ def parse_international_pdf(pdf_path):
                 if 'CANCELLED' in line.upper():
                     continue
 
+                # Some AOCC PDFs join the operator name and aircraft type,
+                # e.g. BEIJING CAPITAL AIRLINESA333 JD455. Restore the
+                # separator without altering normal flight rows.
+                line = re.sub(
+                    r'(?<=[A-Z])(?=[AB][A-Z0-9]{3}\s+[A-Z0-9]+\s+[A-Z]{3}(?:\s*,\s*[A-Z]{3})*\s+\d{2}/\d{2}\s*-)',
+                    ' ', line
+                )
+
                 m = prefix_re.match(line)
                 if not m:
                     continue
