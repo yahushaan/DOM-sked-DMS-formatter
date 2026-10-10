@@ -235,11 +235,11 @@ def parse_international_pdf(pdf_path):
     """
     records = []
     prefix_re = re.compile(
-        r'^(.*?)\s+([AB][A-Z0-9]{3})\s+([A-Z0-9]+)\s+([A-Z]{3})\s+'
+        r'^(.*?)\s+([AB][A-Z0-9]{3})\s+([A-Z0-9]+)\s+([A-Z]{3}(?:\s*,\s*[A-Z]{3})*)\s+'
         r'(\d{2}/\d{2}\s*-\s*\d{2}:\d{2})'
     )
     departure_re = re.compile(
-        r'\b([A-Z0-9]+)\s+([A-Z]{3})\s+'
+        r'\b([A-Z0-9]+)\s+([A-Z]{3}(?:\s*,\s*[A-Z]{3})*)\s+'
         r'(\d{2}/\d{2}\s*-\s*\d{2}:\d{2})'
     )
 
@@ -280,10 +280,10 @@ def parse_international_pdf(pdf_path):
                     'operator': norm(operator).upper(),
                     'type': norm(ac_type).upper(),
                     'arrival': norm(arrival).upper(),
-                    'origin': norm(origin).upper(),
+                    'origin': ','.join(x.strip() for x in origin.upper().split(',')),
                     'sibt': norm(sibt),
                     'departure': norm(departure).upper(),
-                    'destination': norm(destination).upper(),
+                    'destination': ','.join(x.strip() for x in destination.upper().split(',')),
                     'sobt': norm(sobt),
                 })
 
@@ -347,7 +347,7 @@ def build_international_schedule(records):
             'flight': combine_international_flights(r['arrival'], r['departure']),
             'type': r['type'],
             'reg': '',
-            'routing': f"{r['origin']}-MLE-{r['destination']}" if r['destination'] else f"{r['origin']}-MLE",
+            'routing': f"{r['origin'].replace(',', '-')}-MLE-{r['destination'].replace(',', '-')}" if r['destination'] else f"{r['origin'].replace(',', '-')}-MLE",
             'sta': arr_dt['time'], 'eta': None,
             'std': dep_dt['time'] if dep_dt else None, 'atd': None,
         })
