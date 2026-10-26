@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MDV Schedule Converter</title>
+<title>DMS Schedule Converter</title>
 <style>
 body{font-family:Arial,sans-serif;background:#f4f6f8;margin:0;color:#1f2937}
 .wrap{max-width:1100px;margin:35px auto;padding:20px}
@@ -34,8 +34,8 @@ th{background:#f3f4f6}
 </head>
 <body>
 <div class="wrap"><div class="card">
-<h1>MDV Schedule Converter</h1>
-<p>Convert Domestic or International schedule PDFs into the required operational Excel format.</p>
+<h1>DMS Schedule Converter</h1>
+<p>Convert Domestic PDFs or International PDF/Excel schedules into the operational Excel format.</p>
 
 <form method="post" enctype="multipart/form-data" id="convertForm">
 <strong>Schedule type</strong>
@@ -44,12 +44,12 @@ th{background:#f3f4f6}
 <label><input type="radio" name="mode" value="international" {% if mode == 'international' %}checked{% endif %}> International</label>
 </div>
 
-<input id="pdfInput" class="file-input" type="file" name="pdf" accept=".pdf,application/pdf" required>
+<input id="pdfInput" class="file-input" type="file" name="pdf" accept=".pdf,.xlsx,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
 
 <div id="dropZone" class="upload-zone" role="button" tabindex="0" aria-label="Upload schedule PDF">
 <div class="upload-icon">⇧</div>
-<div class="upload-title">Drag &amp; drop your schedule PDF here</div>
-<div class="upload-hint">or click anywhere in this box to choose a PDF</div>
+<div class="upload-title">Drag &amp; drop your schedule PDF or Excel file here</div>
+<div class="upload-hint">or click anywhere in this box to choose a file</div>
 <div id="fileName" class="file-name">No file selected</div>
 </div>
 
@@ -99,8 +99,8 @@ const convertBtn = document.getElementById('convertBtn');
 
 function showFile(file){
   if(!file){ fileName.textContent='No file selected'; return; }
-  if(!file.name.toLowerCase().endsWith('.pdf')){
-    fileName.textContent='Please select a PDF file.';
+  if(!/\.(pdf|xlsx)$/i.test(file.name)){
+    fileName.textContent='Please select a PDF or Excel (.xlsx) file.';
     pdfInput.value='';
     return;
   }
@@ -123,8 +123,8 @@ dropZone.addEventListener('drop',(e)=>{
   const files=e.dataTransfer.files;
   if(!files.length)return;
   const file=files[0];
-  if(!file.name.toLowerCase().endsWith('.pdf')){
-    fileName.textContent='Please drop a PDF file.';
+  if(!/\.(pdf|xlsx)$/i.test(file.name)){
+    fileName.textContent='Please drop a PDF or Excel (.xlsx) file.';
     return;
   }
   const dt=new DataTransfer();
@@ -144,6 +144,7 @@ const modeRadios = document.querySelectorAll('input[name="mode"]');
 
 function updateFreighterUI(){
   const international = document.querySelector('input[name="mode"]:checked').value === 'international';
+  pdfInput.accept = international ? '.pdf,.xlsx,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : '.pdf,application/pdf';
   freighterOption.style.display = international ? 'block' : 'none';
   freighterUpload.style.display = international && includeFreighter.checked ? 'block' : 'none';
   freighterPdfInput.required = international && includeFreighter.checked;
