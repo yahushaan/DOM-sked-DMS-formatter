@@ -302,6 +302,63 @@ def parse_international_pdf(pdf_path):
         )
     return records
 
+
+def parse_international_xlsx(path):
+    """Read AOCC flight export with separate arrival and departure columns."""
+    from datetime import timedelta, date, time
+    from openpyxl.utils.datetime import from_excel
+    wb = load_workbook(path, read_only=True, data_only=True)
+    records = []
+    def date_field(value):
+        if value is None or value == '':
+            return ''
+        if isinstance(value, (int, float)):
+            value = from_excel(value, wb.epoch)
+        if isinstance(value, datetime):
+            return value.strftime('%d/%m - %H:%M')
+        if isinstance(value, date):
+            return value.strftime('%d/%m - 00:00')
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.strip()).strftime('%d/%m - %H:%M')
+            except ValueError:
+                return value.strip()
+        return ''
+    for ws in wb.worksheets:
+        rows = ws.iter_rows(values_only=True)
+        header = next(rows, None)
+        if not header or not all(h in header for h in ('Operator', 'SIBT', 'SOBT', 'Origin', 'Destination')):
+            continue
+        def idx(label):
+            return header.index(label)
+        for row in rows:
+            def val(i):
+                return row[i] if i < len(row) else None
+            op = norm(val(idx('Operator'))).upper()
+            arrival = norm(val(6)).upper()
+            departure = norm(val(17)).upper()
+            origin = norm(val(idx('Origin'))).upper()
+            destination = norm(val(idx('Destination'))).upper()
+            arr_status = norm(val(idx('Arr Status'))).lower() if 'Arr Status' in header else ''
+            dep_status = norm(val(idx('Dep Status'))).lower() if 'Dep Status' in header else ''
+            if not op or 'cancel' in arr_status or 'cancel' in dep_status:
+                continue
+            if not arrival or not origin:
+                continue
+            records.append({
+                'operator': op, 'type': norm(val(idx('Type'))).upper(),
+                'arrival': arrival, 'origin': origin,
+                'sibt': date_field(val(idx('SIBT'))),
+                'departure': departure if departure != '0' else '',
+                'destination': destination if destination != '0' else '',
+                'sobt': date_field(val(idx('SOBT'))),
+                'registration': norm(val(idx('Reg'))).upper() if 'Reg' in header else ''
+            })
+    wb.close()
+    if not records:
+        raise ValueError('No valid International flights found in the Excel schedule. Check the AOCC export column headings.')
+    return records
+
 def build_international_schedule(records):
     # Target operating day = most frequent valid arrival date in the schedule.
     counts = {}
@@ -570,14 +627,17 @@ def index():
 
     if request.method == 'POST':
         f = request.files.get('pdf')
-        if not f or not f.filename.lower().endswith('.pdf'):
-            error = 'Please select a PDF schedule.'
+        if not f or not f.filename.lower().endswith(('.pdf', '.xlsx')):
+            error = 'Please select a PDF schedule, or an Excel (.xlsx) file for International.'
+        elif mode != 'international' and not f.filename.lower().endswith('.pdf'):
+            error = 'Domestic schedules currently require a PDF file.'
         else:
             pdf_path = UPLOADS / secure_filename(f.filename)
             f.save(pdf_path)
             try:
                 if mode == 'international':
-                    records = parse_international_pdf(pdf_path)
+                    records = (parse_international_xlsx(pdf_path) if pdf_path.suffix.lower() == '.xlsx'
+                               else parse_international_pdf(pdf_path))
                     blocks, date_string = build_international_schedule(records)
                     freighter_count = 0
 
