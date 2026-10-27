@@ -304,11 +304,12 @@ def parse_international_pdf(pdf_path):
 
 
 def parse_international_xlsx(path):
-    """Read AOCC flight export with separate arrival and departure columns."""
-    from datetime import timedelta, date, time
+    """Read AOCC exports even when headers start below blank/title rows."""
+    from datetime import date, time
     from openpyxl.utils.datetime import from_excel
     wb = load_workbook(path, read_only=True, data_only=True)
     records = []
+
     def date_field(value):
         if value is None or value == '':
             return ''
@@ -324,39 +325,55 @@ def parse_international_xlsx(path):
             except ValueError:
                 return value.strip()
         return ''
+
     for ws in wb.worksheets:
         rows = ws.iter_rows(values_only=True)
-        header = next(rows, None)
-        if not header or not all(h in header for h in ('Operator', 'SIBT', 'SOBT', 'Origin', 'Destination')):
+        header = None
+        for candidate in rows:
+            names = [norm(v).lower() for v in candidate]
+            required = ('operator', 'sibt', 'sobt', 'origin', 'destination')
+            if all(name in names for name in required) and names.count('identifier') >= 2:
+                header = names
+                break
+        if header is None:
             continue
-        def idx(label):
-            return header.index(label)
+
+        def idx(label, occurrence=0):
+            matches = [i for i, name in enumerate(header) if name == label.lower()]
+            return matches[occurrence] if len(matches) > occurrence else None
+
         for row in rows:
             def val(i):
-                return row[i] if i < len(row) else None
+                return row[i] if i is not None and i < len(row) else None
+
             op = norm(val(idx('Operator'))).upper()
-            arrival = norm(val(6)).upper()
-            departure = norm(val(17)).upper()
+            arrival = norm(val(idx('Identifier', 0))).upper()
+            departure = norm(val(idx('Identifier', 1))).upper()
             origin = norm(val(idx('Origin'))).upper()
             destination = norm(val(idx('Destination'))).upper()
-            arr_status = norm(val(idx('Arr Status'))).lower() if 'Arr Status' in header else ''
-            dep_status = norm(val(idx('Dep Status'))).lower() if 'Dep Status' in header else ''
+            arr_status = norm(val(idx('Arr Status'))).lower()
+            dep_status = norm(val(idx('Dep Status'))).lower()
             if not op or 'cancel' in arr_status or 'cancel' in dep_status:
                 continue
             if not arrival or not origin:
                 continue
+            sibt = date_field(val(idx('SIBT')))
+            if not parse_intl_datetime(sibt):
+                continue
             records.append({
-                'operator': op, 'type': norm(val(idx('Type'))).upper(),
-                'arrival': arrival, 'origin': origin,
-                'sibt': date_field(val(idx('SIBT'))),
+                'operator': op,
+                'type': norm(val(idx('Type'))).upper(),
+                'arrival': arrival,
+                'origin': origin,
+                'sibt': sibt,
                 'departure': departure if departure != '0' else '',
                 'destination': destination if destination != '0' else '',
                 'sobt': date_field(val(idx('SOBT'))),
-                'registration': norm(val(idx('Reg'))).upper() if 'Reg' in header else ''
+                'registration': norm(val(idx('Reg'))).upper()
             })
     wb.close()
     if not records:
-        raise ValueError('No valid International flights found in the Excel schedule. Check the AOCC export column headings.')
+        raise ValueError('No valid International flights found. Check the AOCC Excel header row and date fields.')
     return records
 
 def build_international_schedule(records):
